@@ -1,0 +1,138 @@
+import asyncio
+from aiogram import Bot, Dispatcher, F
+from aiogram.types import Message
+from google import genai
+from translate import Translator
+
+TELEGRAM_TOKEN = "8882295820:AAFZwRdK9zvT9finmBpUni1zBMzUzhdvV0s"
+GEMINI_API_KEY = "AQ.Ab8RN6IUmdhSWl9v-Ez9TP71jDvbHvWu8koQlYFomVJNeCacYQ"
+
+bot = Bot(token=TELEGRAM_TOKEN)
+dp = Dispatcher()
+ai_client = genai.Client(api_key=GEMINI_API_KEY)
+
+def translate(text: str) -> str:
+    latin_count = sum(1 for char in text if char.isalpha() and char.isascii())
+    cyrillic_count = sum(
+        1 for char in text if char.isalpha() and "\u0400" <= char <= "\u04FF"
+    )
+
+    if latin_count == 0 and cyrillic_count == 0:
+        return "Извините, я не нашёл текст для перевода."
+
+    if latin_count > cyrillic_count:
+        from_lang, to_lang = "en", "ru"
+    else:
+        from_lang, to_lang = "ru", "en"
+
+    translator = Translator(from_lang=from_lang, to_lang=to_lang)
+    return translator.translate(text)
+
+@dp.message(F.text == "/start")
+async def cmd_start(message: Message):
+    await message.answer(
+        "Привет! Этот бот создал Даня Блохин для отла на семинаре по информатике"
+    )
+
+@dp.message(F.text)
+async def handle_message(message: Message):
+    await bot.send_chat_action(chat_id=message.chat.id, action="typing")
+
+    user_text = message.text.strip()
+
+    if user_text.startswith("\$"):
+        amount_str = user_text[1:].strip()
+        if not amount_str:
+            await message.reply(
+                "Вы ввели только значок \$. Пожалуйста, укажите сумму. Например: `$150`"
+            )
+            return
+
+        try:
+            prompt_currency = (
+                f"Пользователь хочет конвертировать сумму '{amount_str}' из долларов (USD) в рубли (RUB). "
+                f"Узнай актуальный на сегодняшний день официальный курс доллара к рублю и переведи эту сумму. "
+                f"Напиши ответ коротко и красиво на русском языке с эмодзи. "
+                f"Укажи, какая сумма была изначально, какой сейчас курс и сколько получилось в рублях."
+            )
+
+            response = ai_client.models.generate_content(
+                model="gemini-3.5-flash-lite", contents=prompt_currency
+            )
+            await message.reply(response.text)
+        except Exception as e:
+            await message.reply(
+                f"Произошла ошибка при обращении к ИИ для конвертации валюты: {e}"
+            )
+        return
+
+    elif user_text.startswith("@"):
+        prompt = user_text[1:].strip()
+        if not prompt:
+            await message.reply(
+                "Вы ввели только значок @. Пожалуйста, напишите запрос для ИИ."
+            )
+            return
+
+        try:
+            response = ai_client.models.generate_content(
+                model="gemini-3.5-flash-lite", contents=prompt
+            )
+            await message.reply(response.text)
+        except Exception as e:
+            await message.reply(f"Произошла ошибка при обращении к ИИ: {e}")
+        return
+
+    has_letters = any(char.isalpha() for char in user_text)
+
+    if not has_letters:
+        allowed_chars = set("0123456789+-*/.()** ")
+        if not set(user_text).issubset(allowed_chars):
+            await message.reply(
+                "Строка не содержит букв, но содержит недопустимые для калькулятора символы."
+            )
+            return
+
+        try:
+            result = eval(user_text, {"__builtins__": {}})
+            await message.reply(f"Результат: {result}")
+        except ZeroDivisionError:
+            await message.reply("Ошибка: Деление на ноль невозможно.")
+        except Exception:
+            await message.reply(
+                "Не удалось вычислить выражение. Проверьте правильность знаков."
+            )
+        return
+
+    else:
+        if len(user_text.split()) <= 2:
+            try:
+                prompt_weather = (
+                    f"Если '{user_text}' — это реально существующий город, населенный пункт или страна, "
+                    f"напиши текущую погоду там на русском языке в красивом формате с эмодзи. "
+                    f"Если это обычное слово или фраза (не географическое название), ответь строго одним словом: НЕТ"
+                )
+
+                response = ai_client.models.generate_content(
+                    model="gemini-3.5-flash-lite", contents=prompt_weather
+                )
+
+                ai_reply = response.text.strip()
+
+                if ai_reply.upper() != "НЕТ" and "НЕТ" not in ai_reply[:5]:
+                    await message.reply(ai_reply)
+                    return
+
+            except Exception as e:
+                print(f"Ошибка ИИ при проверке погоды: {e}")
+
+        result = translate(user_text)
+        await message.reply(result)
+
+async def main():
+    print("Бот успешно запущен...")
+    await dp.start_polling(bot)
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
